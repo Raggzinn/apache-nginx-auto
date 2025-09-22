@@ -30,6 +30,29 @@ success() { echo -e "${GREEN}[OK]${NC} $1"; }
 warn()    { echo -e "${YELLOW}[AVISO]${NC} $1"; }
 err()     { echo -e "${RED}[ERRO]${NC} $1"; }
 
+show_help() {
+  echo -e "${CYAN}apache-nginx-auto${NC} — Instalação automática de Nginx + Apache + PHP"
+  echo ""
+  echo -e "Uso: ${YELLOW}sudo ./autoinstall.sh${NC} [opção]"
+  echo ""
+  echo "Opções:"
+  echo "  --help        Mostra esta mensagem"
+  echo "  (sem opção)   Executa a instalação completa"
+  echo ""
+  echo "Configurações padrão:"
+  echo "  Nginx:   porta 80 (proxy reverso)"
+  echo "  Apache:  porta ${APACHE_PORT} (backend PHP)"
+  echo "  Webroot: ${WEBROOT}"
+  exit 0
+}
+
+### Parse de argumentos
+case "${1:-}" in
+  --help|-h) show_help ;;
+  "") ;; # instalação normal
+  *) err "Opção desconhecida: $1"; show_help ;;
+esac
+
 ### Início
 need_root
 
