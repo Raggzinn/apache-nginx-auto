@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+### Cores
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
 ### Configurações
 APACHE_PORT=8080
 APACHE_IP=127.0.0.1
@@ -11,19 +19,22 @@ SERVER_NAME="_"
 ### Funções auxiliares
 need_root() {
   if [[ "$(id -u)" -ne 0 ]]; then
-    echo "Execute como root: sudo $0"
+    echo -e "${RED}[ERRO]${NC} Execute como root: ${YELLOW}sudo $0${NC}"
     exit 1
   fi
 }
 is_cmd() { command -v "$1" &>/dev/null; }
 backup_file() { local f="$1"; [[ -f "$f" && ! -f "${f}.bak" ]] && cp -a "$f" "${f}.bak"; }
-msg() { echo -e "\n>>>> $1\n"; }
+msg()     { echo -e "\n${BLUE}>>>${NC} $1\n"; }
+success() { echo -e "${GREEN}[OK]${NC} $1"; }
+warn()    { echo -e "${YELLOW}[AVISO]${NC} $1"; }
+err()     { echo -e "${RED}[ERRO]${NC} $1"; }
 
 ### Início
 need_root
 
 if ! is_cmd apt-get; then
-  echo "Este script foi feito para Ubuntu/Debian (apt)."
+  err "Este script foi feito para Ubuntu/Debian (apt)."
   exit 1
 fi
 
@@ -32,10 +43,12 @@ export DEBIAN_FRONTEND=noninteractive
 msg "Atualizando pacotes…"
 apt-get update -y
 apt-get upgrade -y
+success "Pacotes atualizados"
 
 msg "Instalando Nginx, Apache e PHP…"
 apt-get install -y nginx apache2 \
   php libapache2-mod-php php-cli php-common php-curl php-xml php-mbstring php-mysql php-zip
+success "Pacotes instalados"
 
 msg "Ajustando Apache para escutar em ${APACHE_IP}:${APACHE_PORT}…"
 backup_file /etc/apache2/ports.conf
@@ -77,6 +90,7 @@ a2enconf remoteip >/dev/null 2>&1 || true
 
 systemctl enable apache2
 systemctl restart apache2
+success "Apache configurado na porta ${APACHE_PORT}"
 
 msg "Criando página PHP de teste em ${WEBROOT}/index.php…"
 install -d -m 0755 "$WEBROOT"
@@ -87,6 +101,7 @@ phpinfo();
 PHP
 fi
 chown -R www-data:www-data "$WEBROOT"
+success "Página de teste criada"
 
 msg "Configurando Nginx com estáticos diretos e proxy para Apache…"
 cat > "/etc/nginx/sites-available/${NGINX_SITE}" <<NGX
@@ -152,17 +167,29 @@ ln -sf "/etc/nginx/sites-available/${NGINX_SITE}" "/etc/nginx/sites-enabled/${NG
 
 msg "Testando configuração do Nginx…"
 nginx -t
+success "Configuração do Nginx válida"
 
 systemctl enable nginx
 systemctl restart nginx
+success "Nginx rodando"
 
 if is_cmd ufw; then
   msg "Ajustando UFW (firewall)…"
   ufw allow 'Nginx Full' || true
   ufw delete allow 'Apache Full' >/dev/null 2>&1 || true
   ufw delete allow 8080/tcp    >/dev/null 2>&1 || true
+  success "Firewall configurado"
 fi
 
-msg "Pronto! Nginx (80) → Apache ${APACHE_IP}:${APACHE_PORT}. PHP executa no Apache."
-echo "Teste no navegador: http://SEU_IP/  (deve abrir o phpinfo())"
-echo "Se estiver na própria máquina: curl -I http://127.0.0.1/"
+echo ""
+echo -e "${GREEN}============================================${NC}"
+echo -e "${GREEN}  Instalação concluída com sucesso!${NC}"
+echo -e "${GREEN}============================================${NC}"
+echo ""
+echo -e "  Nginx (porta 80) → Apache (porta ${APACHE_PORT})"
+echo -e "  PHP executando no Apache via mod_php"
+echo -e "  Webroot: ${WEBROOT}"
+echo ""
+echo -e "  Teste: ${CYAN}curl -I http://127.0.0.1/${NC}"
+echo -e "  Ou abra no navegador: ${CYAN}http://SEU_IP/${NC}"
+echo ""
