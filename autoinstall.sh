@@ -38,6 +38,7 @@ show_help() {
   echo "Opções:"
   echo "  --help        Mostra esta mensagem"
   echo "  --status      Verifica o status dos serviços"
+  echo "  --uninstall   Remove Nginx, Apache e PHP instalados pelo script"
   echo "  (sem opção)   Executa a instalação completa"
   echo ""
   echo "Configurações padrão:"
@@ -79,10 +80,38 @@ show_status() {
   exit 0
 }
 
+do_uninstall() {
+  need_root
+  echo -e "${RED}=== Desinstalação ===${NC}\n"
+  warn "Isso vai remover Nginx, Apache e PHP do sistema."
+  read -rp "Tem certeza? (s/N): " confirm
+  [[ "$confirm" != "s" && "$confirm" != "S" ]] && { echo "Cancelado."; exit 0; }
+
+  msg "Parando serviços..."
+  systemctl stop nginx apache2 2>/dev/null || true
+  systemctl disable nginx apache2 2>/dev/null || true
+
+  msg "Removendo pacotes..."
+  apt-get purge -y nginx nginx-common apache2 apache2-utils \
+    php libapache2-mod-php php-cli php-common php-curl php-xml php-mbstring php-mysql php-zip 2>/dev/null || true
+  apt-get autoremove -y 2>/dev/null || true
+
+  msg "Removendo configurações do script..."
+  rm -f "/etc/nginx/sites-available/${NGINX_SITE}" "/etc/nginx/sites-enabled/${NGINX_SITE}"
+
+  for f in /etc/apache2/ports.conf /etc/apache2/sites-available/000-default.conf; do
+    [[ -f "${f}.bak" ]] && mv "${f}.bak" "$f" && success "Backup restaurado: $f"
+  done
+
+  success "Desinstalação concluída."
+  exit 0
+}
+
 ### Parse de argumentos
 case "${1:-}" in
-  --help|-h)   show_help ;;
-  --status|-s) show_status ;;
+  --help|-h)      show_help ;;
+  --status|-s)    show_status ;;
+  --uninstall|-u) do_uninstall ;;
   "") ;; # instalação normal
   *) err "Opção desconhecida: $1"; show_help ;;
 esac
@@ -249,4 +278,8 @@ echo -e "  Webroot: ${WEBROOT}"
 echo ""
 echo -e "  Teste: ${CYAN}curl -I http://127.0.0.1/${NC}"
 echo -e "  Ou abra no navegador: ${CYAN}http://SEU_IP/${NC}"
+echo ""
+echo -e "  Comandos úteis:"
+echo -e "    ${YELLOW}sudo ./autoinstall.sh --status${NC}      Verifica serviços"
+echo -e "    ${YELLOW}sudo ./autoinstall.sh --uninstall${NC}   Remove tudo"
 echo ""
