@@ -37,6 +37,7 @@ show_help() {
   echo ""
   echo "Opções:"
   echo "  --help        Mostra esta mensagem"
+  echo "  --status      Verifica o status dos serviços"
   echo "  (sem opção)   Executa a instalação completa"
   echo ""
   echo "Configurações padrão:"
@@ -46,9 +47,42 @@ show_help() {
   exit 0
 }
 
+show_status() {
+  need_root
+  echo -e "${CYAN}=== Status dos Serviços ===${NC}\n"
+
+  for svc in nginx apache2; do
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+      success "$svc está rodando"
+    else
+      err "$svc não está rodando"
+    fi
+  done
+
+  echo ""
+  if is_cmd php; then
+    success "PHP $(php -r 'echo PHP_VERSION;') instalado"
+  else
+    err "PHP não encontrado"
+  fi
+
+  echo ""
+  echo -e "${CYAN}Portas em uso:${NC}"
+  ss -tlnp 2>/dev/null | grep -E ':80\s|:8080\s' || warn "Nenhuma porta 80/8080 encontrada"
+
+  echo ""
+  if nginx -t 2>/dev/null; then
+    success "Configuração do Nginx válida"
+  else
+    err "Configuração do Nginx com erros"
+  fi
+  exit 0
+}
+
 ### Parse de argumentos
 case "${1:-}" in
-  --help|-h) show_help ;;
+  --help|-h)   show_help ;;
+  --status|-s) show_status ;;
   "") ;; # instalação normal
   *) err "Opção desconhecida: $1"; show_help ;;
 esac
