@@ -16,6 +16,11 @@ WEBROOT="/var/www/html"
 NGINX_SITE="apache-proxy"
 SERVER_NAME="_"
 
+INSTALL_MARIADB=0
+MARIADB_ROOT_PASS="${MARIADB_ROOT_PASS:-}"   # vazio = gera automaticamente
+MARIADB_BIND="0.0.0.0"                       # "::" para IPv4+IPv6
+MARIADB_CNF="/etc/mysql/mariadb.conf.d/99-remote.cnf"
+
 ### Funções auxiliares
 need_root() {
   if [[ "$(id -u)" -ne 0 ]]; then
@@ -31,20 +36,23 @@ warn()    { echo -e "${YELLOW}[AVISO]${NC} $1"; }
 err()     { echo -e "${RED}[ERRO]${NC} $1"; }
 
 show_help() {
-  echo -e "${CYAN}apache-nginx-auto${NC} — Instalação automática de Nginx + Apache + PHP"
+  echo -e "${CYAN}apache-nginx-auto${NC} — Instalação automática de Nginx + Apache + PHP (+ MariaDB opcional)"
   echo ""
-  echo -e "Uso: ${YELLOW}sudo ./autoinstall.sh${NC} [opção]"
+  echo -e "Uso: ${YELLOW}sudo ./autoinstall.sh${NC} [opções]"
   echo ""
   echo "Opções:"
-  echo "  --help        Mostra esta mensagem"
-  echo "  --status      Verifica o status dos serviços"
-  echo "  --uninstall   Remove Nginx, Apache e PHP instalados pelo script"
-  echo "  (sem opção)   Executa a instalação completa"
+  echo "  --help              Mostra esta mensagem"
+  echo "  --status            Verifica o status dos serviços"
+  echo "  --uninstall         Remove Nginx, Apache, PHP e MariaDB instalados pelo script"
+  echo "  --mariadb           Instala MariaDB junto (root com senha, acesso de qualquer IP)"
+  echo "  --db-pass SENHA     Senha do root do MariaDB (ou env MARIADB_ROOT_PASS; padrão: gerada)"
+  echo "  (sem opção)         Executa a instalação completa sem MariaDB"
   echo ""
   echo "Configurações padrão:"
-  echo "  Nginx:   porta 80 (proxy reverso)"
-  echo "  Apache:  porta ${APACHE_PORT} (backend PHP)"
-  echo "  Webroot: ${WEBROOT}"
+  echo "  Nginx:    porta 80 (proxy reverso)"
+  echo "  Apache:   porta ${APACHE_PORT} (backend PHP)"
+  echo "  MariaDB:  porta 3306, bind ${MARIADB_BIND}"
+  echo "  Webroot:  ${WEBROOT}"
   exit 0
 }
 
@@ -52,7 +60,9 @@ show_status() {
   need_root
   echo -e "${CYAN}=== Status dos Serviços ===${NC}\n"
 
-  for svc in nginx apache2; do
+  svcs=(nginx apache2)
+  dpkg -s mariadb-server &>/dev/null && svcs+=(mariadb)
+  for svc in "${svcs[@]}"; do
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
       success "$svc está rodando"
     else
@@ -69,7 +79,7 @@ show_status() {
 
   echo ""
   echo -e "${CYAN}Portas em uso:${NC}"
-  ss -tlnp 2>/dev/null | grep -E ':80\s|:8080\s' || warn "Nenhuma porta 80/8080 encontrada"
+  ss -tlnp 2>/dev/null | grep -E ':80\s|:8080\s|:3306\s' || warn "Nenhuma porta 80/8080/3306 encontrada"
 
   echo ""
   if nginx -t 2>/dev/null; then
@@ -83,38 +93,54 @@ show_status() {
 do_uninstall() {
   need_root
   echo -e "${RED}=== Desinstalação ===${NC}\n"
-  warn "Isso vai remover Nginx, Apache e PHP do sistema."
+  warn "Isso vai remover Nginx, Apache, PHP e MariaDB do sistema."
   read -rp "Tem certeza? (s/N): " confirm
   [[ "$confirm" != "s" && "$confirm" != "S" ]] && { echo "Cancelado."; exit 0; }
 
   msg "Parando serviços..."
-  systemctl stop nginx apache2 2>/dev/null || true
-  systemctl disable nginx apache2 2>/dev/null || true
+  systemctl stop nginx apache2 mariadb 2>/dev/null || true
+  systemctl disable nginx apache2 mariadb 2>/dev/null || true
 
   msg "Removendo pacotes..."
   apt-get purge -y nginx nginx-common apache2 apache2-utils \
-    php libapache2-mod-php php-cli php-common php-curl php-xml php-mbstring php-mysql php-zip 2>/dev/null || true
+    php libapache2-mod-php php-cli php-common php-curl php-xml php-mbstring php-mysql php-zip \
+    mariadb-server mariadb-client 2>/dev/null || true
   apt-get autoremove -y 2>/dev/null || true
 
   msg "Removendo configurações do script..."
   rm -f "/etc/nginx/sites-available/${NGINX_SITE}" "/etc/nginx/sites-enabled/${NGINX_SITE}"
+  rm -f "$MARIADB_CNF" /root/.my.cnf
 
   for f in /etc/apache2/ports.conf /etc/apache2/sites-available/000-default.conf; do
     [[ -f "${f}.bak" ]] && mv "${f}.bak" "$f" && success "Backup restaurado: $f"
   done
+
+  if [[ -d /var/lib/mysql ]]; then
+    read -rp "Remover dados do MariaDB (/var/lib/mysql)? (s/N): " rmdata
+    if [[ "$rmdata" == "s" || "$rmdata" == "S" ]]; then
+      rm -rf /var/lib/mysql /etc/mysql
+      success "Dados do MariaDB removidos"
+    fi
+  fi
 
   success "Desinstalação concluída."
   exit 0
 }
 
 ### Parse de argumentos
-case "${1:-}" in
-  --help|-h)      show_help ;;
-  --status|-s)    show_status ;;
-  --uninstall|-u) do_uninstall ;;
-  "") ;; # instalação normal
-  *) err "Opção desconhecida: $1"; show_help ;;
-esac
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --help|-h)      show_help ;;
+    --status|-s)    show_status ;;
+    --uninstall|-u) do_uninstall ;;
+    --mariadb|-m)   INSTALL_MARIADB=1 ;;
+    --db-pass)      [[ -n "${2:-}" ]] || { err "--db-pass requer uma senha"; exit 1; }
+                    MARIADB_ROOT_PASS="$2"; INSTALL_MARIADB=1; shift ;;
+    --db-pass=*)    MARIADB_ROOT_PASS="${1#*=}"; INSTALL_MARIADB=1 ;;
+    *)              err "Opção desconhecida: $1"; show_help ;;
+  esac
+  shift
+done
 
 ### Início
 need_root
@@ -259,9 +285,57 @@ systemctl enable nginx
 systemctl restart nginx
 success "Nginx rodando"
 
+### MariaDB (opcional)
+if [[ "$INSTALL_MARIADB" -eq 1 ]]; then
+  msg "Instalando MariaDB…"
+  apt-get install -y mariadb-server mariadb-client
+  success "MariaDB instalado"
+
+  if [[ -z "$MARIADB_ROOT_PASS" ]]; then
+    MARIADB_ROOT_PASS="$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')"
+    MARIADB_ROOT_PASS="${MARIADB_ROOT_PASS:0:20}"
+    warn "Senha do root gerada automaticamente (veja o resumo no final)"
+  fi
+
+  msg "Liberando acesso remoto (bind ${MARIADB_BIND})…"
+  cat > "$MARIADB_CNF" <<CONF
+# Gerado por autoinstall.sh
+[mysqld]
+bind-address      = ${MARIADB_BIND}
+skip-name-resolve = 1
+CONF
+
+  systemctl enable mariadb
+  systemctl restart mariadb
+  success "MariaDB escutando em ${MARIADB_BIND}:3306"
+
+  msg "Configurando root (local + remoto)…"
+  MYSQL_BIN="$(command -v mariadb || command -v mysql)"
+  mysql_root() { "$MYSQL_BIN" --protocol=socket -uroot -e "$1"; }
+  pass_sql="${MARIADB_ROOT_PASS//\\/\\\\}"
+  pass_sql="${pass_sql//\'/\'\'}"
+
+  # >= 10.4: senha + unix_socket (mantém 'sudo mysql' e logrotate); < 10.4: só senha
+  mysql_root "ALTER USER 'root'@'localhost' IDENTIFIED VIA mysql_native_password USING PASSWORD('${pass_sql}') OR unix_socket;" 2>/dev/null \
+    || mysql_root "ALTER USER 'root'@'localhost' IDENTIFIED BY '${pass_sql}';"
+
+  mysql_root "CREATE OR REPLACE USER 'root'@'%' IDENTIFIED BY '${pass_sql}';
+              GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
+              FLUSH PRIVILEGES;"
+
+  cat > /root/.my.cnf <<CONF
+[client]
+user=root
+password="${MARIADB_ROOT_PASS}"
+CONF
+  chmod 600 /root/.my.cnf
+  success "root@localhost e root@% configurados com senha"
+fi
+
 if is_cmd ufw; then
   msg "Ajustando UFW (firewall)…"
   ufw allow 'Nginx Full' || true
+  if [[ "$INSTALL_MARIADB" -eq 1 ]]; then ufw allow 3306/tcp || true; fi
   ufw delete allow 'Apache Full' >/dev/null 2>&1 || true
   ufw delete allow 8080/tcp    >/dev/null 2>&1 || true
   success "Firewall configurado"
@@ -276,6 +350,12 @@ echo -e "  Nginx (porta 80) → Apache (porta ${APACHE_PORT})"
 echo -e "  PHP executando no Apache via mod_php"
 echo -e "  Webroot: ${WEBROOT}"
 echo ""
+if [[ "$INSTALL_MARIADB" -eq 1 ]]; then
+  echo -e "  MariaDB: ${MARIADB_BIND}:3306 (root liberado de qualquer IP)"
+  echo -e "    Senha root: ${YELLOW}${MARIADB_ROOT_PASS}${NC}  (salva em /root/.my.cnf)"
+  echo -e "    Teste: ${CYAN}mysql -h SEU_IP -uroot -p${NC}"
+  echo ""
+fi
 echo -e "  Teste: ${CYAN}curl -I http://127.0.0.1/${NC}"
 echo -e "  Ou abra no navegador: ${CYAN}http://SEU_IP/${NC}"
 echo ""
